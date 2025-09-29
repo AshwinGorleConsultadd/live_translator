@@ -1,0 +1,7 @@
+#!/Users/consultadd/Desktop/My project/translator/translator_env_311/bin/python3.11
+
+from argostranslate import cli
+
+cli.main()
+
+

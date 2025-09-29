@@ -1,0 +1,8 @@
+assemblyai>=0.20.0
+argostranslate>=1.9.0
+TTS
+pyaudio>=0.2.11
+numpy>=1.21.0
+sounddevice>=0.4.6
+soundfile>=0.12.1
+scipy>=1.7.0
