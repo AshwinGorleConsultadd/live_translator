@@ -103,11 +103,14 @@ class AudioCaptureManager:
             self.client.on(StreamingEvents.Termination, self._on_terminated)
             self.client.on(StreamingEvents.Error, self._on_error)
             
-            # Connect to AssemblyAI
+            # Connect to AssemblyAI with less sensitive pause detection
             self.client.connect(
                 StreamingParameters(
                     sample_rate=sample_rate,
-                    format_turns=True
+                    format_turns=True,
+                    # Make it less sensitive to pauses - wait longer before ending turn
+                    end_utterance_silence_threshold=4000,  # 2 seconds of silence (default is 700ms)
+                    speech_completion_timeout=10000,  # 8 seconds timeout
                 )
             )
             

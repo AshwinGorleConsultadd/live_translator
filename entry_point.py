@@ -57,6 +57,8 @@ class LiveTranslator:
         # TTS muting controls
         self.is_tts_playing = False
         self.mic_paused = False
+        self.audio_monitor_thread = None
+        self.stop_audio_monitor = False
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -94,12 +96,26 @@ class LiveTranslator:
         """Callback for when TTS audio is generated."""
         self.logger.info(f"3️⃣ SPANISH AUDIO READY → Playing through speakers")
         
-        # PAUSE MICROPHONE when TTS starts playing
-        self.is_tts_playing = True
-        if self.audio_capture and not self.mic_paused:
-            self.audio_capture.pause_streaming()
-            self.mic_paused = True
-            self.logger.info("🔇 MICROPHONE PAUSED - TTS playing")
+        # Get audio duration and calculate resume time
+        audio_duration = self._get_audio_duration(audio_path)
+        if audio_duration > 0:
+            # PAUSE MICROPHONE immediately when TTS starts
+            self.is_tts_playing = True
+            if self.audio_capture and not self.mic_paused:
+                self.audio_capture.pause_streaming()
+                self.mic_paused = True
+                self.logger.info("🔇 MICROPHONE PAUSED - TTS playing")
+            
+            # Calculate exact resume time: duration + 2.5s safety buffer
+            # The 2.5s buffer accounts for audio buffering, system delays, speaker output, and echo
+            resume_delay = audio_duration + 2.5
+            self.logger.info(f"⏱️ Audio duration: {audio_duration:.2f}s, will resume in {resume_delay:.2f}s (2.5s safety buffer)")
+            
+            # Start real-time audio monitoring as backup
+            self._start_real_time_monitoring(audio_duration)
+            
+            # Schedule microphone resume (primary method)
+            threading.Timer(resume_delay, self._resume_microphone_scheduled).start()
         
         # Queue for audio output
         if self.audio_output:
@@ -109,14 +125,60 @@ class LiveTranslator:
         """Callback for audio playback events."""
         # Debug: Log all audio messages
         self.logger.debug(f"Audio callback received: '{message}'")
-        
-        # Resume microphone when TTS playback finishes
-        if "finished playing" in message.lower() and self.is_tts_playing:
+    
+    def _get_audio_duration(self, audio_path: str):
+        """Get the exact duration of the audio file."""
+        try:
+            import wave
+            with wave.open(audio_path, 'rb') as wav_file:
+                frames = wav_file.getnframes()
+                sample_rate = wav_file.getframerate()
+                duration = frames / float(sample_rate)
+                return duration
+        except Exception as e:
+            self.logger.error(f"Error getting audio duration: {e}")
+            return 0
+    
+    def _resume_microphone_scheduled(self):
+        """Resume microphone after scheduled delay."""
+        if self.audio_capture and self.mic_paused:
+            self.audio_capture.resume_streaming()
+            self.mic_paused = False
             self.is_tts_playing = False
-            if self.audio_capture and self.mic_paused:
-                self.audio_capture.resume_streaming()
-                self.mic_paused = False
-                self.logger.info("🎤 MICROPHONE RESUMED - TTS finished")
+            self.stop_audio_monitor = True
+            self.logger.info("🎤 MICROPHONE RESUMED - Scheduled delay completed")
+    
+    def _start_real_time_monitoring(self, audio_duration):
+        """Start real-time monitoring to detect when audio actually stops."""
+        self.stop_audio_monitor = False
+        self.audio_monitor_thread = threading.Thread(
+            target=self._monitor_audio_real_time,
+            args=(audio_duration,),
+            daemon=True
+        )
+        self.audio_monitor_thread.start()
+    
+    def _monitor_audio_real_time(self, audio_duration):
+        """Monitor audio in real-time and resume microphone when truly finished."""
+        import time
+        
+        # Wait for audio duration + extra buffer
+        max_wait_time = audio_duration + 4.0  # 4 second maximum buffer
+        check_interval = 0.1  # Check every 100ms
+        
+        self.logger.info(f"🔍 Real-time monitoring: max {max_wait_time:.2f}s")
+        
+        start_time = time.time()
+        while not self.stop_audio_monitor and (time.time() - start_time) < max_wait_time:
+            time.sleep(check_interval)
+            
+            # Check if we should resume (this is a backup safety mechanism)
+            elapsed = time.time() - start_time
+            if elapsed >= audio_duration + 3.0:  # 3 second buffer
+                if self.audio_capture and self.mic_paused and self.is_tts_playing:
+                    self.logger.info("🔍 Real-time monitoring: Audio should be finished, resuming microphone")
+                    self._resume_microphone_scheduled()
+                    break
     
     def initialize(self):
         """Initialize all components."""
